@@ -26,8 +26,26 @@ class Notset(enum.Enum):
 NOTSET = Notset.Notset
 
 
-class Rest(bytes):
-    pass
+class CustomField[T]:
+    @classmethod
+    def parse(cls, stream: "StreamReader", parsed: dict[str, typing.Any]) -> T:
+        raise NotImplementedError()
+
+    @classmethod
+    def serialize(cls, stream: "StreamWriter", obj: typing.Any, value: T) -> None:
+        raise NotImplementedError()
+
+
+class Rest(CustomField[bytes]):
+    @typing.override
+    @classmethod
+    def parse(cls, stream: "StreamReader", parsed: dict[str, typing.Any]) -> bytes:
+        return stream.read_raw(None)
+
+    @typing.override
+    @classmethod
+    def serialize(cls, stream: "StreamWriter", obj: typing.Any, value: bytes) -> None:
+        stream.write_raw(value)
 
 
 @dataclasses.dataclass
@@ -42,7 +60,7 @@ class FieldInfo[T, U]:
     serializer: Callable[[U], T]
 
     def __post_init__(self):
-        if self.underlaying_type not in _UNDERLAYING_TYPES:  # type: ignore[call-arg]
+        if self.underlaying_type not in _UNDERLAYING_TYPES and not issubclass(self.underlaying_type, CustomField):  # type: ignore[call-arg]
             raise TypeError(
                 f"Field has unsupported underlaying type {self.underlaying_type}. Supported types are: {_UNDERLAYING_TYPES}"
             )
@@ -72,10 +90,12 @@ _UNDERLAYING_TYPES = (
     ctypes.c_uint16,
     ctypes.c_uint32,
     ctypes.c_uint64,
-    Rest,
+    CustomField,
 )
 
-UNDERLAYING_TYPES_T = int | bytes | str | ctypes.c_uint8 | ctypes.c_uint16 | ctypes.c_uint32 | ctypes.c_uint64 | Rest
+UNDERLAYING_TYPES_T = (
+    int | bytes | str | ctypes.c_uint8 | ctypes.c_uint16 | ctypes.c_uint32 | ctypes.c_uint64 | CustomField[typing.Any]
+)
 
 
 @dataclasses.dataclass
@@ -120,12 +140,24 @@ def _process_field(cls: type, name: str, annotation: type) -> FieldInfo[typing.A
             ):
                 _underlaying_type = int
 
+            if issubclass(_underlaying_type, CustomField):
+                return FieldInfo(
+                    name=name,
+                    underlaying_type=_underlaying_type,  # type: ignore
+                    overlaying_type=overlaying_type,
+                    parser=None,  # type: ignore
+                    serializer=None,  # type: ignore
+                    is_class_var=is_class_var,
+                    is_discriminator=is_discriminator,
+                    const_value=const_value,
+                )
+
             def _serializer_simple(x: typing.Any):
                 return _underlaying_type(x)
 
             return FieldInfo(
                 name=name,
-                underlaying_type=underlaying_type,
+                underlaying_type=_underlaying_type,
                 overlaying_type=overlaying_type,
                 parser=_parser_simple,
                 serializer=_serializer_simple,
@@ -146,6 +178,18 @@ def _process_field(cls: type, name: str, annotation: type) -> FieldInfo[typing.A
                         ctypes.c_uint64,
                     ):
                         _underlaying_type = int
+
+                    if issubclass(_underlaying_type, CustomField):
+                        return FieldInfo(
+                            name=name,
+                            underlaying_type=_underlaying_type,
+                            overlaying_type=overlaying_type,
+                            parser=None,  # type: ignore
+                            serializer=None,  # type: ignore
+                            is_class_var=is_class_var,
+                            is_discriminator=is_discriminator,
+                            const_value=const_value,
+                        )
 
                     def _parser_adv(x: typing.Any):
                         return overlaying_type(x)
@@ -245,6 +289,13 @@ class Packet:
     def __init_subclass__(cls: "type[Packet]") -> None:
         _process_class(cls)
 
+    @classmethod
+    def model_unmarshal(cls, stream: "StreamReader", parsed: dict[str, typing.Any]) -> typing.Self:
+        return cls(**parsed)  # type: ignore[call-arg]
+
+    def model_marshal(self, stream: "StreamWriter") -> None:
+        pass
+
 
 def is_packet(cls: type) -> bool:
     return hasattr(cls, _SSH_PROTO_TYPE_INFO)
@@ -292,7 +343,7 @@ class StreamWriter:
         b = value.encode("utf-8")
         self.write_bytes(b)
 
-    def write_rest(self, value: Rest) -> None:
+    def write_raw(self, value: bytes) -> None:
         self.data.extend(value)
 
     @typing.overload
@@ -324,18 +375,19 @@ class StreamWriter:
                 self.write_bytes(value)  # type: ignore[arg-type]
             case c if c is str:
                 self.write_string(value)  # type: ignore[arg-type]
-            case c if c is Rest:
-                self.write_rest(value)  # type: ignore[arg-type]
             case _:
                 raise TypeError(f"Unsupported type {ctype} for writing")
 
     def get_bytes(self) -> bytes:
         return bytes(self.data)
 
+    def __len__(self) -> int:
+        return len(self.data)
+
 
 @dataclasses.dataclass
 class StreamReader:
-    data: bytes
+    data: memoryview | bytes
     idx: int = 0
 
     def _get_slice(self, length: int) -> bytes:
@@ -343,7 +395,7 @@ class StreamReader:
             raise EOFError("Not enough data to read")
         value = self.data[self.idx : self.idx + length]
         self.idx += length
-        return value
+        return bytes(value)
 
     def read_uint8(self) -> int:
         data = self._get_slice(1)
@@ -374,10 +426,11 @@ class StreamReader:
         data = self.read_bytes()
         return data.decode("utf-8")
 
-    def read_rest(self) -> Rest:
-        data = self.data[self.idx :]
-        self.idx = len(self.data)
-        return Rest(data)
+    def read_raw(self, length: int | None) -> bytes:
+        if length is None:
+            length = len(self.data) - self.idx
+        data = self._get_slice(length)
+        return data
 
     def read(self, ctype: type[UNDERLAYING_TYPES_T]) -> int | bytes | str | Rest:
         match ctype:
@@ -395,13 +448,17 @@ class StreamReader:
                 return self.read_bytes()
             case c if c is str:
                 return self.read_string()
-            case c if c is Rest:
-                return self.read_rest()
             case _:
                 raise TypeError(f"Unsupported type {ctype} for reading")
 
     def eof(self) -> bool:
         return self.idx >= len(self.data)
+
+    def __len__(self) -> int:
+        return len(self.data) - self.idx
+
+    def amount_read(self) -> int:
+        return self.idx
 
 
 class InvalidHeader(RuntimeError):
@@ -420,12 +477,16 @@ def _unmarshal_field(
                 f"Field {field.name} has constant value {field.const_value}, but got {parsed[field.name]}"
             )
         return parsed[field.name]
-    value = stream.read(field.underlaying_type)
-    value = field.parser(value)
+    if issubclass(field.underlaying_type, CustomField):
+        value = field.underlaying_type.parse(stream, parsed)  # type: ignore[arg-type]
+        parsed[field.name] = value
+    else:
+        value = stream.read(field.underlaying_type)
+        value = field.parser(value)
     parsed[field.name] = value
     if field.const_value is not NOTSET and value != field.const_value:
         raise ValueError(f"Field {field.name} has constant value {field.const_value}, but got {value}")
-    return value
+    return value  # type: ignore[return-value]
 
 
 def _unmarshal[T: Packet](
@@ -450,14 +511,14 @@ def _unmarshal[T: Packet](
 
 
 def unmarshal[T: Packet](cls: type[T], data: bytes) -> T:
-    stream = StreamReader(data)
+    stream = StreamReader(memoryview(data))
     parsed, cls = _unmarshal(stream, cls, {})
 
     for field in get_class_info(cls).fields.values():
         if field.is_class_var:
             del parsed[field.name]
 
-    return cls(**parsed)
+    return cls.model_unmarshal(stream, parsed)  # type: ignore[call-arg]
 
 
 def marshal(obj: Packet) -> bytes:
@@ -467,7 +528,12 @@ def marshal(obj: Packet) -> bytes:
     stream = StreamWriter()
     for field in info.fields.values():
         value = getattr(obj, field.name)
-        value = field.serializer(value)  # Validate serialization
-        stream.write(field.underlaying_type, value)
+        if issubclass(field.underlaying_type, CustomField):
+            field.underlaying_type.serialize(stream, obj, value)  # type: ignore[arg-type]
+        else:
+            value = field.serializer(value)  # Validate serialization
+            stream.write(field.underlaying_type, value)
+
+    obj.model_marshal(stream)
 
     return stream.get_bytes()

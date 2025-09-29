@@ -1,9 +1,11 @@
 import ctypes
-from typing import Annotated, ClassVar
+from typing import Annotated, Any, ClassVar, Self, override
 
 import pytest
 
+import ssh_proto_types
 from ssh_proto_types import (
+    CustomField,
     Field,
     FieldInfo,
     InvalidHeader,
@@ -180,4 +182,126 @@ def test_packet_with_rest():
 
     obj = RestPacket(a=1, rest=b"restdata")
     got = unmarshal(RestPacket, marshal(obj))
+    assert got == obj
+
+
+class Padding(CustomField[bool]):
+    BLOCK_SIZE = 8
+
+    @override
+    @classmethod
+    def parse(cls, stream: ssh_proto_types.StreamReader, parsed: dict[str, object]) -> bool:
+        missing_amount = (cls.BLOCK_SIZE - (stream.amount_read() % cls.BLOCK_SIZE)) % cls.BLOCK_SIZE
+        value = stream.read_raw(missing_amount)  # Discard padding bytes
+        return value == bytes(range(1, missing_amount + 1))
+
+    @override
+    @classmethod
+    def serialize(cls, stream: ssh_proto_types.StreamWriter, obj: object, value: bool) -> None:
+        if not value:
+            raise ValueError("Padding field must be True")
+
+        missing_amount = (cls.BLOCK_SIZE - (len(stream) % cls.BLOCK_SIZE)) % cls.BLOCK_SIZE
+        stream.write_raw(bytes(range(1, missing_amount + 1)))  # Write padding bytes
+
+
+def test_packet_with_padding():
+    class PaddingPacket(Packet):
+        a: int
+        padding: Annotated[bool, Padding]
+
+    obj = PaddingPacket(a=1, padding=True)
+    v = marshal(obj)
+    assert v == b"\x00\x00\x00\x01\x01\x01\x02\x03"
+    got = unmarshal(PaddingPacket, marshal(obj))
+    assert got == obj
+
+
+def test_packet_with_padding_unmarshal():
+    class PaddingPacket(Packet):
+        a: int
+        padding: Annotated[bool, Padding]
+
+    class PaddingPacket2(Packet):
+        a: int
+        padding: ClassVar[Annotated[bool, Padding]] = True
+
+    valid = b"\x00\x00\x00\x01\x01\x01\x02\x03"
+    invalid = b"\x00\x00\x00\x01\x01\x01\x02\x04"
+
+    got = unmarshal(PaddingPacket, valid)
+    assert got == PaddingPacket(a=1, padding=True)
+
+    got = unmarshal(PaddingPacket, invalid)
+    assert got == PaddingPacket(a=1, padding=False)
+
+    got = unmarshal(PaddingPacket2, valid)
+    assert got == PaddingPacket2(a=1)
+
+    with pytest.raises(ValueError):
+        unmarshal(PaddingPacket2, invalid)
+
+
+class Pad(int, CustomField["Pad"]):
+    BLOCK_SIZE = 8
+
+    @override
+    @classmethod
+    def parse(cls, stream: ssh_proto_types.StreamReader, parsed: dict[str, object]) -> "Pad":
+        missing_amount = (cls.BLOCK_SIZE - (stream.amount_read() % cls.BLOCK_SIZE)) % cls.BLOCK_SIZE
+        value = stream.read_raw(missing_amount)  # Discard padding bytes
+        if value != bytes(range(1, missing_amount + 1)):
+            raise ValueError("Invalid padding bytes")
+        return cls(missing_amount)
+
+    @override
+    @classmethod
+    def serialize(cls, stream: ssh_proto_types.StreamWriter, obj: object, value: "Pad") -> None:
+        missing_amount = (cls.BLOCK_SIZE - (len(stream) % cls.BLOCK_SIZE)) % cls.BLOCK_SIZE
+        stream.write_raw(bytes(range(1, missing_amount + 1)))  # Write padding bytes
+
+
+def test_packet_with_padding_obj():
+    class PaddingPacket(Packet):
+        a: int
+        padding: Pad = Pad(3)
+
+    obj = PaddingPacket(a=1)
+    v = marshal(obj)
+    assert v == b"\x00\x00\x00\x01\x01\x01\x02\x03"
+    got = unmarshal(PaddingPacket, marshal(obj))
+    assert got == obj
+
+
+def test_packet_with_model_marshal():
+    class PaddingPacket(Packet):
+        a: int
+        block_size: int = 8
+
+        def model_marshal(self, stream: ssh_proto_types.StreamWriter) -> None:
+            missing_amount = (self.block_size - (len(stream) % self.block_size)) % self.block_size
+            stream.write_raw(bytes(range(1, missing_amount + 1)))  # Write padding bytes
+
+        @classmethod
+        def model_unmarshal(cls, stream: ssh_proto_types.StreamReader, parsed: dict[str, Any]) -> Self:
+            block_size: int = parsed["block_size"]
+            missing_amount = (block_size - (stream.amount_read() % block_size)) % block_size
+            value = stream.read_raw(missing_amount)  # Discard padding bytes
+            if value != bytes(range(1, missing_amount + 1)):
+                raise ValueError("Invalid padding bytes")
+
+            return super().model_unmarshal(stream, parsed)
+
+    obj = PaddingPacket(a=1)
+    v = marshal(obj)
+    assert v == b"\x00\x00\x00\x01\x01\x00\x00\x00\x01\x08\x01\x02\x03\x04\x05\x06"
+    assert len(v) % obj.block_size == 0
+    got = unmarshal(PaddingPacket, marshal(obj))
+    assert got == obj
+
+    obj = PaddingPacket(a=1, block_size=7)
+    v = marshal(obj)
+    assert v == b"\x00\x00\x00\x01\x01\x00\x00\x00\x01\x07\x01\x02\x03\x04"
+    assert len(v) % obj.block_size == 0
+    got = unmarshal(PaddingPacket, marshal(obj))
     assert got == obj

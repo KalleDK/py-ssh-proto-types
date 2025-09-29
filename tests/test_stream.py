@@ -25,7 +25,6 @@ testdata_writer: list[tuple[type, Any, bytes]] = [
     (int, 2**32 - 1, b"\x00\x00\x00\x05\x00\xff\xff\xff\xff"),
     (bytes, b"hello", b"\x00\x00\x00\x05hello"),
     (str, "hello", b"\x00\x00\x00\x05hello"),
-    (Rest, Rest(b"restdata"), b"restdata"),  # type: ignore[type-arg
 ]
 
 
@@ -70,9 +69,9 @@ def test_streamreader_invalid_type():
 
 
 def test_streamreader_rest():
-    reader = StreamReader(b"\x00\x01restdata")
+    reader = StreamReader(memoryview(b"\x00\x01restdata"))
     got = reader.read(ctypes.c_uint16)
     assert got == 1
-    got = reader.read(Rest)  # type: ignore[type-arg]
-    assert got == Rest(b"restdata")  # type: ignore[type-arg]
+    got = Rest.parse(reader, {})
+    assert got == b"restdata"
     assert reader.eof()
