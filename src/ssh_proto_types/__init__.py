@@ -314,6 +314,7 @@ def get_parent_class(cls: type[Packet]) -> type[Packet] | None:
 @dataclasses.dataclass
 class StreamWriter:
     data: bytearray = dataclasses.field(default_factory=bytearray)
+    offset: int = 0
 
     def write_uint8(self, value: int) -> None:
         self.data.append(value & 0xFF)
@@ -379,16 +380,25 @@ class StreamWriter:
                 raise TypeError(f"Unsupported type {ctype} for writing")
 
     def get_bytes(self) -> bytes:
-        return bytes(self.data)
+        return bytes(self.data[self.offset :])
 
     def __len__(self) -> int:
-        return len(self.data)
+        return len(self.data) - self.offset
 
 
 @dataclasses.dataclass
 class StreamReader:
     data: memoryview | bytes
-    idx: int = 0
+    _idx: int = 0
+    offset: int = 0
+
+    @property
+    def idx(self) -> int:
+        return self._idx + self.offset
+
+    @idx.setter
+    def idx(self, value: int) -> None:
+        self._idx = value - self.offset
 
     def _get_slice(self, length: int) -> bytes:
         if self.idx + length > len(self.data):
@@ -458,7 +468,7 @@ class StreamReader:
         return len(self.data) - self.idx
 
     def amount_read(self) -> int:
-        return self.idx
+        return self._idx
 
 
 class InvalidHeader(RuntimeError):
@@ -510,30 +520,37 @@ def _unmarshal[T: Packet](
     return parsed, typing.cast(type[T], child_cls)
 
 
-def unmarshal[T: Packet](cls: type[T], data: bytes) -> T:
-    stream = StreamReader(memoryview(data))
+def unmarshal[T: Packet](cls: type[T], data: bytes | StreamReader) -> T:
+    stream = (
+        StreamReader(data.data, offset=data.idx) if isinstance(data, StreamReader) else StreamReader(memoryview(data))
+    )
     parsed, cls = _unmarshal(stream, cls, {})
 
     for field in get_class_info(cls).fields.values():
         if field.is_class_var:
             del parsed[field.name]
 
-    return cls.model_unmarshal(stream, parsed)  # type: ignore[call-arg]
+    obj = cls.model_unmarshal(stream, parsed)  # type: ignore[call-arg]
+
+    if isinstance(data, StreamReader):
+        data.idx = stream.idx
+
+    return obj
 
 
-def marshal(obj: Packet) -> bytes:
+def marshal(obj: Packet, stream: StreamWriter | None = None) -> bytes:
     info = get_class_info(obj)
     if info.header:
         raise ValueError("Cannot marshal header class directly")
-    stream = StreamWriter()
+    _stream = StreamWriter() if stream is None else StreamWriter(stream.data, offset=len(stream))  # type: ignore[arg-type]
     for field in info.fields.values():
         value = getattr(obj, field.name)
         if issubclass(field.underlaying_type, CustomField):
-            field.underlaying_type.serialize(stream, obj, value)  # type: ignore[arg-type]
+            field.underlaying_type.serialize(_stream, obj, value)  # type: ignore[arg-type]
         else:
             value = field.serializer(value)  # Validate serialization
-            stream.write(field.underlaying_type, value)
+            _stream.write(field.underlaying_type, value)
 
-    obj.model_marshal(stream)
+    obj.model_marshal(_stream)
 
-    return stream.get_bytes()
+    return _stream.get_bytes()

@@ -107,3 +107,21 @@ def test_unmarshal_invalid_header():
             Header,
             b"\x00\x00\x00\x01\x01\x00\x00\x00\x06active\x00\x00\x00\x04test",
         )
+
+
+def test_unmarshal_reader():
+    class SimplePacket(Packet):
+        a: int
+        b: bytes
+        c: str
+
+    data = b"\x00\x00\x00\x01\x01\x00\x00\x00\x05hello\x00\x00\x00\x05world\x01"
+    from ssh_proto_types import StreamReader
+
+    reader = StreamReader(data)
+    got = unmarshal(SimplePacket, reader)
+    want = SimplePacket(a=1, b=b"hello", c="world")
+    assert got == want
+    assert not reader.eof()
+    assert reader.read_raw(1) == b"\x01"
+    assert reader.eof()
