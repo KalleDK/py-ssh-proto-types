@@ -7,7 +7,7 @@ from collections.abc import Callable
 
 _SSH_PROTO_TYPE_INFO = "__ssh_proto_type_info__"
 
-__version__ = "0.1.3"
+__version__ = "0.1.4"
 
 
 def _is_dataclass(cls: type) -> bool:
