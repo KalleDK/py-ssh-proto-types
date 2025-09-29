@@ -26,6 +26,10 @@ class Notset(enum.Enum):
 NOTSET = Notset.Notset
 
 
+class Rest(bytes):
+    pass
+
+
 @dataclasses.dataclass
 class FieldInfo[T, U]:
     is_class_var: bool
@@ -68,9 +72,10 @@ _UNDERLAYING_TYPES = (
     ctypes.c_uint16,
     ctypes.c_uint32,
     ctypes.c_uint64,
+    Rest,
 )
 
-UNDERLAYING_TYPES_T = int | bytes | str | ctypes.c_uint8 | ctypes.c_uint16 | ctypes.c_uint32 | ctypes.c_uint64
+UNDERLAYING_TYPES_T = int | bytes | str | ctypes.c_uint8 | ctypes.c_uint16 | ctypes.c_uint32 | ctypes.c_uint64 | Rest
 
 
 @dataclasses.dataclass
@@ -287,6 +292,9 @@ class StreamWriter:
         b = value.encode("utf-8")
         self.write_bytes(b)
 
+    def write_rest(self, value: Rest) -> None:
+        self.data.extend(value)
+
     @typing.overload
     def write(
         self,
@@ -295,7 +303,7 @@ class StreamWriter:
     ) -> None: ...
 
     @typing.overload
-    def write(self, ctype: type[bytes], value: bytes) -> None: ...
+    def write(self, ctype: type[bytes | Rest], value: bytes) -> None: ...
 
     @typing.overload
     def write(self, ctype: type[str], value: str) -> None: ...
@@ -316,6 +324,8 @@ class StreamWriter:
                 self.write_bytes(value)  # type: ignore[arg-type]
             case c if c is str:
                 self.write_string(value)  # type: ignore[arg-type]
+            case c if c is Rest:
+                self.write_rest(value)  # type: ignore[arg-type]
             case _:
                 raise TypeError(f"Unsupported type {ctype} for writing")
 
@@ -364,7 +374,12 @@ class StreamReader:
         data = self.read_bytes()
         return data.decode("utf-8")
 
-    def read(self, ctype: type[UNDERLAYING_TYPES_T]) -> int | bytes | str:
+    def read_rest(self) -> Rest:
+        data = self.data[self.idx :]
+        self.idx = len(self.data)
+        return Rest(data)
+
+    def read(self, ctype: type[UNDERLAYING_TYPES_T]) -> int | bytes | str | Rest:
         match ctype:
             case c if c is ctypes.c_uint8:
                 return self.read_uint8()
@@ -380,6 +395,8 @@ class StreamReader:
                 return self.read_bytes()
             case c if c is str:
                 return self.read_string()
+            case c if c is Rest:
+                return self.read_rest()
             case _:
                 raise TypeError(f"Unsupported type {ctype} for reading")
 

@@ -3,7 +3,7 @@ from typing import Any
 
 import pytest
 
-from ssh_proto_types import StreamReader, StreamWriter
+from ssh_proto_types import Rest, StreamReader, StreamWriter
 
 testdata_writer: list[tuple[type, Any, bytes]] = [
     (ctypes.c_uint8, 1, b"\x01"),
@@ -25,6 +25,7 @@ testdata_writer: list[tuple[type, Any, bytes]] = [
     (int, 2**32 - 1, b"\x00\x00\x00\x05\x00\xff\xff\xff\xff"),
     (bytes, b"hello", b"\x00\x00\x00\x05hello"),
     (str, "hello", b"\x00\x00\x00\x05hello"),
+    (Rest, Rest(b"restdata"), b"restdata"),  # type: ignore[type-arg
 ]
 
 
@@ -66,3 +67,12 @@ def test_streamreader_invalid_type():
     reader = StreamReader(b"\x00\x01")
     with pytest.raises(TypeError):
         reader.read(float)  # pyright: ignore[reportArgumentType]
+
+
+def test_streamreader_rest():
+    reader = StreamReader(b"\x00\x01restdata")
+    got = reader.read(ctypes.c_uint16)
+    assert got == 1
+    got = reader.read(Rest)  # type: ignore[type-arg]
+    assert got == Rest(b"restdata")  # type: ignore[type-arg]
+    assert reader.eof()

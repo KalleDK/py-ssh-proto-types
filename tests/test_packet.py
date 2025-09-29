@@ -9,6 +9,7 @@ from ssh_proto_types import (
     InvalidHeader,
     Notset,
     Packet,
+    Rest,
     get_class_info,
     marshal,
     unmarshal,
@@ -170,3 +171,13 @@ def test_very_illegal_packet():
     assert marshal(ChildPacketA()) == b"\x00\x00\x00\x01\x01\x00\x00\x00\x01\x02"
     with pytest.raises(InvalidHeader):
         unmarshal(Parent, b"\x00\x00\x00\x01\x01\x00\x00\x00\x01\x01")
+
+
+def test_packet_with_rest():
+    class RestPacket(Packet):
+        a: int
+        rest: Annotated[bytes, Rest]  # type: ignore[type-arg]
+
+    obj = RestPacket(a=1, rest=b"restdata")
+    got = unmarshal(RestPacket, marshal(obj))
+    assert got == obj
