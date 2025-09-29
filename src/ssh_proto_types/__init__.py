@@ -99,16 +99,20 @@ UNDERLAYING_TYPES_T = (
 
 
 @dataclasses.dataclass
-class Field:
-    type: type[UNDERLAYING_TYPES_T]
-    parser: Callable[[UNDERLAYING_TYPES_T], typing.Any] | None = None
-    serializer: Callable[[typing.Any], UNDERLAYING_TYPES_T] | None = None
+class Field[T: UNDERLAYING_TYPES_T]:
+    type: type[T]
+    parser: Callable[[T], typing.Any] | None = None
+    serializer: Callable[[typing.Any], T] | None = None
 
     def __post_init__(self):
         if self.type not in _UNDERLAYING_TYPES:
             raise TypeError(
                 f"Field has unsupported underlaying type {self.type}. Supported types are: {_UNDERLAYING_TYPES}"
             )
+
+
+def is_field(obj: typing.Any) -> typing.TypeGuard[Field[typing.Any]]:
+    return isinstance(obj, Field)
 
 
 def _process_field(cls: type, name: str, annotation: type) -> FieldInfo[typing.Any, typing.Any]:
@@ -167,7 +171,7 @@ def _process_field(cls: type, name: str, annotation: type) -> FieldInfo[typing.A
             )
         else:
             for arg in args:
-                if isinstance(arg, Field):
+                if is_field(arg):
                     underlaying_type = arg.type
 
                     _underlaying_type = underlaying_type
@@ -481,7 +485,6 @@ def _unmarshal_field(
     parsed: dict[str, typing.Any],
 ) -> typing.Any:
     if field.name in parsed:
-        print(f"Field {field.name} already parsed, skipping")
         if field.const_value is not NOTSET and parsed[field.name] != field.const_value:
             raise InvalidHeader(
                 f"Field {field.name} has constant value {field.const_value}, but got {parsed[field.name]}"
