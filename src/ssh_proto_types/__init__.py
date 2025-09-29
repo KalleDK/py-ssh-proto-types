@@ -143,7 +143,7 @@ def _process_field(cls: type, name: str, annotation: type) -> FieldInfo[typing.A
             if issubclass(_underlaying_type, CustomField):
                 return FieldInfo(
                     name=name,
-                    underlaying_type=_underlaying_type,  # type: ignore
+                    underlaying_type=underlaying_type,  # type: ignore
                     overlaying_type=overlaying_type,
                     parser=None,  # type: ignore
                     serializer=None,  # type: ignore
@@ -157,7 +157,7 @@ def _process_field(cls: type, name: str, annotation: type) -> FieldInfo[typing.A
 
             return FieldInfo(
                 name=name,
-                underlaying_type=_underlaying_type,
+                underlaying_type=underlaying_type,
                 overlaying_type=overlaying_type,
                 parser=_parser_simple,
                 serializer=_serializer_simple,
@@ -182,7 +182,7 @@ def _process_field(cls: type, name: str, annotation: type) -> FieldInfo[typing.A
                     if issubclass(_underlaying_type, CustomField):
                         return FieldInfo(
                             name=name,
-                            underlaying_type=_underlaying_type,
+                            underlaying_type=underlaying_type,
                             overlaying_type=overlaying_type,
                             parser=None,  # type: ignore
                             serializer=None,  # type: ignore

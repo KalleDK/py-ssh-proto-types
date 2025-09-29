@@ -305,3 +305,17 @@ def test_packet_with_model_marshal():
     assert len(v) % obj.block_size == 0
     got = unmarshal(PaddingPacket, marshal(obj))
     assert got == obj
+
+
+def test_packet_uint32():
+    class UInt32Packet(Packet):
+        a: Annotated[int, ctypes.c_uint32]
+
+    i = get_class_info(UInt32Packet)
+    assert i.fields["a"].underlaying_type == ctypes.c_uint32
+
+    obj = UInt32Packet(a=1)
+    v = marshal(obj)
+    assert v == b"\x00\x00\x00\x01"
+    got = unmarshal(UInt32Packet, v)
+    assert got == obj
