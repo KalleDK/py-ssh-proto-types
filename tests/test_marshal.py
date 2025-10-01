@@ -3,6 +3,7 @@ from typing import ClassVar
 import pytest
 
 from ssh_proto_types import Packet, marshal, unmarshal
+from ssh_proto_types.packet import InvalidHeader
 
 
 class SimplePacket(Packet):
@@ -102,7 +103,7 @@ def test_unmarshal_invalid_header():
         mode: ClassVar[str] = "active"
         name: str
 
-    with pytest.raises(ValueError):
+    with pytest.raises(InvalidHeader):
         unmarshal(
             Header,
             b"\x00\x00\x00\x01\x01\x00\x00\x00\x06active\x00\x00\x00\x04test",
