@@ -742,31 +742,25 @@ def _unmarshal[T: Packet](
 
 
 def unmarshal[T: Packet](cls: type[T], data: bytes | StreamReader) -> T:
-    stream = (
-        StreamReader(data.data, offset=data.idx) if isinstance(data, StreamReader) else StreamReader(memoryview(data))
-    )
-    parsed, cls = _unmarshal(stream, cls, {})
+    with StreamReader.of(data) as stream:
+        parsed, cls = _unmarshal(stream, cls, {})
 
-    for field in get_class_info(cls).fields.values():
-        if field.is_class_var:
-            del parsed[field.name]
+        for field in get_class_info(cls).fields.values():
+            if field.is_class_var:
+                del parsed[field.name]
 
-    obj = cls.model_unmarshal(stream, parsed)  # type: ignore[call-arg]
-
-    if isinstance(data, StreamReader):
-        data.idx = stream.idx
-
-    return obj
+        return cls.model_unmarshal(stream, parsed)  # type: ignore[call-arg]
 
 
 def marshal(obj: Packet, stream: StreamWriter | None = None) -> bytes:
     info = get_class_info(obj)
     if info.header:
         raise ValueError("Cannot marshal header class directly")
-    _stream = StreamWriter() if stream is None else StreamWriter(stream.data, offset=len(stream))  # type: ignore[arg-type]
-    for field in info.fields.values():
-        field.marshal(_stream, obj)
 
-    obj.model_marshal(_stream)
+    with StreamWriter.of(stream) as _stream:
+        for field in info.fields.values():
+            field.marshal(_stream, obj)
 
-    return _stream.get_bytes()
+        obj.model_marshal(_stream)
+
+        return _stream.get_bytes()

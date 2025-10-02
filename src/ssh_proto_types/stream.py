@@ -1,3 +1,4 @@
+import contextlib
 import ctypes
 import dataclasses
 import typing
@@ -9,6 +10,21 @@ from ssh_proto_types.basetypes import UNDERLAYING_TYPES_T, rest
 class StreamWriter:
     data: bytearray = dataclasses.field(default_factory=bytearray)
     offset: int = 0
+
+    @classmethod
+    @contextlib.contextmanager
+    def of(cls, data: "bytearray | StreamWriter | None"):
+        if not isinstance(data, StreamWriter):
+            data = data if data is not None else bytearray()
+            yield cls(data)
+            return
+
+        with data.substream() as stream:
+            yield stream
+
+    @contextlib.contextmanager
+    def substream(self):
+        yield StreamWriter(self.data, offset=len(self))
 
     def write_uint8(self, value: int) -> None:
         self.data.append(value & 0xFF)
@@ -96,9 +112,30 @@ class StreamWriter:
 
 @dataclasses.dataclass
 class StreamReader:
-    data: memoryview | bytes
-    _idx: int = 0
+    data: dataclasses.InitVar["bytes | memoryview[bytes]"]
+    _data: "memoryview[bytes]" = dataclasses.field(init=False)
+    _idx: int = dataclasses.field(default=0, init=False)
     offset: int = 0
+
+    def __post_init__(self, data: "bytes | memoryview[bytes]") -> None:
+        self._data = memoryview(data).cast("c") if isinstance(data, bytes) else data
+
+    @classmethod
+    @contextlib.contextmanager
+    def of(cls, data: "bytes | memoryview[bytes] | StreamReader"):
+        if isinstance(data, StreamReader):
+            with data.substream() as stream:
+                yield stream
+        else:
+            yield cls(data)
+
+    @contextlib.contextmanager
+    def substream(self):
+        stream = StreamReader(self._data, offset=self.idx)
+        try:
+            yield stream
+        finally:
+            self.idx = stream.idx
 
     @property
     def idx(self) -> int:
@@ -109,9 +146,9 @@ class StreamReader:
         self._idx = value - self.offset
 
     def _get_slice(self, length: int) -> bytes:
-        if self.idx + length > len(self.data):
+        if self.idx + length > len(self._data):
             raise EOFError("Not enough data to read")
-        value = self.data[self.idx : self.idx + length]
+        value = self._data[self.idx : self.idx + length]
         self.idx += length
         return bytes(value)
 
@@ -146,7 +183,7 @@ class StreamReader:
 
     def read_raw(self, length: int | None) -> bytes:
         if length is None:
-            length = len(self.data) - self.idx
+            length = len(self._data) - self.idx
         data = self._get_slice(length)
         return data
 
@@ -184,10 +221,10 @@ class StreamReader:
                 raise TypeError(f"Unsupported type {ctype} for reading")
 
     def eof(self) -> bool:
-        return self.idx >= len(self.data)
+        return self.idx >= len(self._data)
 
     def __len__(self) -> int:
-        return len(self.data) - self.idx
+        return len(self._data) - self.idx
 
     def amount_read(self) -> int:
         return self._idx
