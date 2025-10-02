@@ -4,7 +4,7 @@ from ssh_proto_types.basetypes import nested, rest
 from ssh_proto_types.packet import Packet, field, marshal, unmarshal
 from ssh_proto_types.stream import StreamReader, StreamWriter
 
-__version__ = "0.1.9.1"
+__version__ = "0.1.10"
 __all__ = [
     "Packet",
     "marshal",
