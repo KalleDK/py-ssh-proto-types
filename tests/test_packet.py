@@ -6,7 +6,7 @@ from typing import Annotated, Any, ClassVar, Literal, Self, override
 import pytest
 
 from ssh_proto_types import Packet, StreamReader, StreamWriter, marshal, rest, unmarshal
-from ssh_proto_types.basetypes import Notset, nested
+from ssh_proto_types.basetypes import Notset, exclude, nested
 from ssh_proto_types.packet import FieldClassProto, FieldProto, InvalidHeader, PFieldInfo, field, get_class_info
 
 
@@ -58,8 +58,65 @@ def test_class_info() -> None:
 
     info = get_class_info(APacket)
     assert not info.header
-    assert info.fields["a"] == PFieldInfo("a", False, False, Notset.Notset, int)
-    assert info.fields["b"] == PFieldInfo("b", False, False, Notset.Notset, bytes)
+    assert info.fields["a"] == PFieldInfo(
+        name="a",
+        is_class_var=False,
+        is_discriminator=False,
+        const_value=Notset.Notset,
+        underlaying_type=int,
+        is_excluded=False,
+    )
+    assert info.fields["b"] == PFieldInfo(
+        name="b",
+        is_class_var=False,
+        is_discriminator=False,
+        const_value=Notset.Notset,
+        underlaying_type=bytes,
+        is_excluded=False,
+    )
+
+
+def test_class_excluded_info() -> None:
+    class APacket(Packet):
+        a: ClassVar[Annotated[int, exclude]] = 1
+        b: ClassVar[bytes] = b"const"
+        c: Annotated[bytes, exclude]
+        d: int
+
+    info = get_class_info(APacket)
+    assert not info.header
+    assert info.fields["a"] == PFieldInfo(
+        name="a",
+        is_class_var=True,
+        is_discriminator=False,
+        const_value=1,
+        underlaying_type=int,
+        is_excluded=True,
+    )
+    assert info.fields["b"] == PFieldInfo(
+        name="b",
+        is_class_var=True,
+        is_discriminator=False,
+        const_value=b"const",
+        underlaying_type=bytes,
+        is_excluded=False,
+    )
+    assert info.fields["c"] == PFieldInfo(
+        name="c",
+        is_class_var=False,
+        is_discriminator=False,
+        const_value=Notset.Notset,
+        underlaying_type=bytes,
+        is_excluded=True,
+    )
+    assert info.fields["d"] == PFieldInfo(
+        name="d",
+        is_class_var=False,
+        is_discriminator=False,
+        const_value=Notset.Notset,
+        underlaying_type=int,
+        is_excluded=False,
+    )
 
 
 def test_simple_annotatin():
@@ -296,3 +353,73 @@ def test_nested_packet() -> None:
         b"\x00\x00\x00\x01\x03"  # inner.y
         b"\x00\x00\x00\x05hello"  # b
     )
+
+
+def test_exclude_packet_marshal() -> None:
+    class InnerPacket(Packet):
+        x: ClassVar[Annotated[int, exclude]] = 1
+        y: int
+
+    class OuterPacket(Packet):
+        a: Annotated[int, exclude] = 1
+        inner: Annotated[InnerPacket, nested]
+        b: bytes
+
+    assert marshal(OuterPacket(inner=InnerPacket(y=3), b=b"hello")) == (
+        b""  # a excluded
+        b"\x00\x00\x00\x05"  # length of inner
+        b""  # x excluded
+        b"\x00\x00\x00\x01\x03"  # inner.y
+        b"\x00\x00\x00\x05hello"  # b
+    )
+
+
+def test_exclude_packet_unmarshal() -> None:
+    class InnerPacket(Packet):
+        y: int
+
+    class OuterPacket(Packet):
+        a: Annotated[int, exclude] = 1
+        inner: Annotated[InnerPacket, nested]
+        b: bytes
+
+    arg = (
+        b""  # a excluded
+        b"\x00\x00\x00\x05"  # length of inner
+        b""  # x excluded
+        b"\x00\x00\x00\x01\x03"  # inner.y
+        b"\x00\x00\x00\x05hello"  # b
+    )
+
+    want = OuterPacket(a=2, inner=InnerPacket(y=3), b=b"hello")
+    got = unmarshal(OuterPacket, arg, parsed={"a": 2})
+    assert got == want
+
+
+def test_exclude_parent_unmarshal() -> None:
+    class ParentPacket(Packet):
+        a: ClassVar[Annotated[int, exclude]]
+
+    class ChildPacket(ParentPacket):
+        a: ClassVar[Annotated[int, exclude]] = 1
+        b: bytes
+
+    arg = b"\x00\x00\x00\x05hello"  # b
+
+    want = ChildPacket(b=b"hello")
+    got = unmarshal(ParentPacket, arg, parsed={"a": 1})
+    assert got == want
+
+
+def test_exclude_parent_marshal() -> None:
+    class ParentPacket(Packet):
+        a: ClassVar[Annotated[int, exclude]]
+
+    class ChildPacket(ParentPacket):
+        a: ClassVar[Annotated[int, exclude]] = 1
+        b: bytes
+
+    arg = ChildPacket(b=b"hello")
+    want = b"\x00\x00\x00\x05hello"  # b
+    got = marshal(arg)
+    assert got == want

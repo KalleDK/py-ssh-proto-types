@@ -12,6 +12,7 @@ from ssh_proto_types.basetypes import (
     UNDERLAYING_TYPES,
     UNDERLAYING_TYPES_T,
     Notset,
+    exclude,
     is_c_types_t,
     is_p_types_t,
     is_r_types_t,
@@ -131,12 +132,13 @@ def _is_field_class_proto_t(annotation: type) -> typing.TypeGuard[type[FieldProt
     return sig == _FIELD_CLASS_PROTO_SIG.replace_obj(obj)
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(kw_only=True)
 class FieldInfoBase[O]:
     name: str
     is_class_var: bool
     is_discriminator: bool
     const_value: O | Notset
+    is_excluded: bool
 
     def _unmarshal_value(self, stream: "StreamReader", parsed: Mapping[str, typing.Any]) -> O:
         raise NotImplementedError()
@@ -146,6 +148,9 @@ class FieldInfoBase[O]:
 
     @typing.final
     def unmarshal(self, stream: "StreamReader", parsed: Mapping[str, typing.Any]) -> O:
+        if self.is_excluded and self.name not in parsed:
+            raise ValueError(f"Field {self.name} is excluded, but not present in parsed values")
+
         o_value = parsed[self.name] if self.name in parsed else self._unmarshal_value(stream, parsed)
 
         if self.const_value is not NOTSET and o_value != self.const_value:
@@ -165,11 +170,20 @@ class FieldInfoBase[O]:
 class FieldPacketInfo(FieldInfoBase["Packet"]):
     packet_type: type["Packet"]
     nested: bool
+    discriminator_name: str | None
 
     @typing.override
     def _unmarshal_value(self, stream: "StreamReader", parsed: Mapping[str, typing.Any]) -> "Packet":
+        if self.discriminator_name is not None and self.discriminator_name not in parsed:
+            raise ValueError(
+                f"Field {self.name} is a discriminator, but discriminator name {self.discriminator_name} is not present in parsed values"
+            )
+
         data = stream.read_bytes() if self.nested else stream
-        return unmarshal(self.packet_type, data)
+        child_parsed = (
+            {} if self.discriminator_name is None else {self.discriminator_name: parsed[self.discriminator_name]}
+        )
+        return unmarshal(self.packet_type, data, child_parsed)
 
     @typing.override
     def _marshal_value(self, stream: "StreamWriter", obj: "Packet") -> None:
@@ -455,10 +469,15 @@ def _generate_field_info(cls: type, name: str, annotation: type) -> FieldInfoBas
 
     is_annotated = typing.get_origin(annotation) is typing.Annotated
 
+    is_excluded = False
     if is_annotated:
         _args = typing.get_args(annotation)
         overlaying_type = _args[0]
         annotations = _args[1:]
+        for ann in annotations:
+            if ann is exclude:
+                is_excluded = True
+                break
     else:
         overlaying_type: type = annotation
         annotations: tuple[typing.Any, ...] = ()
@@ -470,10 +489,17 @@ def _generate_field_info(cls: type, name: str, annotation: type) -> FieldInfoBas
             is_class_var=is_class_var,
             is_discriminator=is_discriminator,
             const_value=const_value,
+            is_excluded=is_excluded,
         )
 
     if not is_annotated:
         if issubclass(overlaying_type, Packet):
+            child_info = get_class_info(overlaying_type)
+            child_discriminator_name = None
+            if child_info.header:
+                child_discriminator = child_info.get_descriptor_field()
+                child_discriminator_name = child_discriminator.name
+
             return FieldPacketInfo(
                 name=name,
                 packet_type=overlaying_type,
@@ -481,6 +507,8 @@ def _generate_field_info(cls: type, name: str, annotation: type) -> FieldInfoBas
                 is_discriminator=is_discriminator,
                 const_value=const_value,
                 nested=False,
+                is_excluded=is_excluded,
+                discriminator_name=child_discriminator_name,
             )
         if overlaying_type not in P_TYPES:
             raise TypeError(
@@ -492,6 +520,7 @@ def _generate_field_info(cls: type, name: str, annotation: type) -> FieldInfoBas
             is_class_var=is_class_var,
             is_discriminator=is_discriminator,
             const_value=const_value,
+            is_excluded=is_excluded,
         )
 
     if len(annotations) == 1:
@@ -504,6 +533,7 @@ def _generate_field_info(cls: type, name: str, annotation: type) -> FieldInfoBas
                     is_class_var=is_class_var,
                     is_discriminator=is_discriminator,
                     const_value=const_value,
+                    is_excluded=is_excluded,
                 )
 
             return FullRFieldInfo(
@@ -514,6 +544,7 @@ def _generate_field_info(cls: type, name: str, annotation: type) -> FieldInfoBas
                 underlaying_type=underlaying_type,
                 parser=make_parser(overlaying_type),
                 serializer=make_serializer(bytes),
+                is_excluded=is_excluded,
             )
         if is_c_types_t(underlaying_type):
             if overlaying_type is int:
@@ -523,6 +554,7 @@ def _generate_field_info(cls: type, name: str, annotation: type) -> FieldInfoBas
                     is_class_var=is_class_var,
                     is_discriminator=is_discriminator,
                     const_value=const_value,
+                    is_excluded=is_excluded,
                 )
 
             return FullCFieldInfo(
@@ -533,6 +565,7 @@ def _generate_field_info(cls: type, name: str, annotation: type) -> FieldInfoBas
                 underlaying_type=underlaying_type,
                 parser=make_parser(overlaying_type),
                 serializer=make_serializer(int),
+                is_excluded=is_excluded,
             )
         if is_p_types_t(underlaying_type):
             return FullPFieldInfo(
@@ -543,6 +576,7 @@ def _generate_field_info(cls: type, name: str, annotation: type) -> FieldInfoBas
                 underlaying_type=underlaying_type,
                 parser=make_parser(overlaying_type),
                 serializer=make_serializer(underlaying_type),
+                is_excluded=is_excluded,
             )
         if _is_field_class_proto_t(underlaying_type):
             return FieldProtoInfo(
@@ -551,6 +585,7 @@ def _generate_field_info(cls: type, name: str, annotation: type) -> FieldInfoBas
                 is_class_var=is_class_var,
                 is_discriminator=is_discriminator,
                 const_value=const_value,
+                is_excluded=is_excluded,
             )
 
     for underlaying_type in annotations:
@@ -565,6 +600,7 @@ def _generate_field_info(cls: type, name: str, annotation: type) -> FieldInfoBas
                 underlaying_type=_underlaying_type,
                 parser=_field.parser if _field.parser is not None else make_parser(overlaying_type),
                 serializer=_field.serializer if _field.serializer is not None else make_serializer(bytes),
+                is_excluded=is_excluded,
             )
         if is_p_field(underlaying_type):
             _field = underlaying_type
@@ -577,6 +613,7 @@ def _generate_field_info(cls: type, name: str, annotation: type) -> FieldInfoBas
                 underlaying_type=_underlaying_type,
                 parser=_field.parser if _field.parser is not None else make_parser(overlaying_type),
                 serializer=_field.serializer if _field.serializer is not None else make_serializer(_underlaying_type),
+                is_excluded=is_excluded,
             )
         if is_c_field(underlaying_type):
             _field = underlaying_type
@@ -589,6 +626,7 @@ def _generate_field_info(cls: type, name: str, annotation: type) -> FieldInfoBas
                 underlaying_type=_underlaying_type,
                 parser=_field.parser if _field.parser is not None else make_parser(overlaying_type),
                 serializer=_field.serializer if _field.serializer is not None else make_serializer(int),
+                is_excluded=is_excluded,
             )
         if _is_field_class_proto_t(underlaying_type):
             return FieldProtoInfo(
@@ -597,8 +635,14 @@ def _generate_field_info(cls: type, name: str, annotation: type) -> FieldInfoBas
                 is_class_var=is_class_var,
                 is_discriminator=is_discriminator,
                 const_value=const_value,
+                is_excluded=is_excluded,
             )
         if underlaying_type is nested and issubclass(overlaying_type, Packet):
+            child_info = get_class_info(overlaying_type)
+            child_discriminator_name = None
+            if child_info.header:
+                child_discriminator = child_info.get_descriptor_field()
+                child_discriminator_name = child_discriminator.name
             return FieldPacketInfo(
                 name=name,
                 packet_type=overlaying_type,
@@ -606,9 +650,16 @@ def _generate_field_info(cls: type, name: str, annotation: type) -> FieldInfoBas
                 is_discriminator=is_discriminator,
                 const_value=const_value,
                 nested=True,
+                is_excluded=is_excluded,
+                discriminator_name=child_discriminator_name,
             )
 
     if issubclass(overlaying_type, Packet):
+        child_info = get_class_info(overlaying_type)
+        child_discriminator_name = None
+        if child_info.header:
+            child_discriminator = child_info.get_descriptor_field()
+            child_discriminator_name = child_discriminator.name
         return FieldPacketInfo(
             name=name,
             packet_type=overlaying_type,
@@ -616,6 +667,8 @@ def _generate_field_info(cls: type, name: str, annotation: type) -> FieldInfoBas
             is_discriminator=is_discriminator,
             const_value=const_value,
             nested=False,
+            is_excluded=is_excluded,
+            discriminator_name=child_discriminator_name,
         )
     if overlaying_type in P_TYPES:
         return PFieldInfo(
@@ -624,6 +677,7 @@ def _generate_field_info(cls: type, name: str, annotation: type) -> FieldInfoBas
             is_class_var=is_class_var,
             is_discriminator=is_discriminator,
             const_value=const_value,
+            is_excluded=is_excluded,
         )
 
     raise TypeError(
@@ -741,9 +795,11 @@ def _unmarshal[T: Packet](
     return parsed, typing.cast(type[T], child_cls)
 
 
-def unmarshal[T: Packet](cls: type[T], data: bytes | StreamReader) -> T:
+def unmarshal[T: Packet](cls: type[T], data: bytes | StreamReader, parsed: dict[str, typing.Any] | None = None) -> T:
+    if parsed is None:
+        parsed = {}
     with StreamReader.of(data) as stream:
-        parsed, cls = _unmarshal(stream, cls, {})
+        parsed, cls = _unmarshal(stream, cls, parsed)
 
         for field in get_class_info(cls).fields.values():
             if field.is_class_var:
@@ -759,6 +815,8 @@ def marshal(obj: Packet, stream: StreamWriter | None = None) -> bytes:
 
     with StreamWriter.of(stream) as _stream:
         for field in info.fields.values():
+            if field.is_excluded:
+                continue
             field.marshal(_stream, obj)
 
         obj.model_marshal(_stream)

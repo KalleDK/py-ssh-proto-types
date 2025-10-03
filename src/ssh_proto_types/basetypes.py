@@ -18,6 +18,10 @@ class nested:
     pass
 
 
+class exclude:
+    pass
+
+
 R_TYPES = (rest,)
 C_TYPES = (ctypes.c_uint8, ctypes.c_uint16, ctypes.c_uint32, ctypes.c_uint64)
 P_TYPES = (int, bytes, str)
