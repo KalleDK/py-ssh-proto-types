@@ -2,6 +2,7 @@ import dataclasses
 import inspect
 import typing
 from collections.abc import Callable, Mapping
+from types import UnionType
 
 from ssh_proto_types.basetypes import (
     C_TYPES_T,
@@ -454,7 +455,7 @@ class _ClassInfo:
         return self.children[descriptor_value]
 
 
-def _generate_field_info(cls: type, name: str, annotation: type) -> FieldInfoBase[typing.Any]:
+def _generate_field_info(cls: type, name: str, annotation: type) -> FieldInfoBase[typing.Any] | None:
     # region ClassVar
     is_class_var = _is_classvar(annotation)
     if is_class_var:
@@ -493,6 +494,16 @@ def _generate_field_info(cls: type, name: str, annotation: type) -> FieldInfoBas
         )
 
     if not is_annotated:
+        if isinstance(overlaying_type, UnionType):  # type: ignore[misc] This can be union type maybe
+            return FieldInfoBase(
+                name=name,
+                is_class_var=is_class_var,
+                is_discriminator=is_discriminator,
+                const_value=const_value,
+                is_excluded=is_excluded,
+            )
+        if overlaying_type is None:  # pyright: ignore[reportUnnecessaryComparison] This might be None
+            return None
         if issubclass(overlaying_type, Packet):
             child_info = get_class_info(overlaying_type)
             child_discriminator_name = None
@@ -687,8 +698,10 @@ def _generate_field_info(cls: type, name: str, annotation: type) -> FieldInfoBas
 
 def _process_field(
     cls: type, name: str, annotation: type, parent_field_info: FieldInfoBase[typing.Any] | None
-) -> FieldInfoBase[typing.Any]:
+) -> FieldInfoBase[typing.Any] | None:
     field_info = _generate_field_info(cls, name, annotation)
+    if field_info is None:
+        return None
     if parent_field_info is None:
         return field_info
     if parent_field_info.is_discriminator:
@@ -725,7 +738,12 @@ def _process_class(cls: "type[Packet]") -> None:
 
     field_annotations = inspect.get_annotations(cls)
     for field_name, field_annotation in field_annotations.items():
-        fields[field_name] = _process_field(cls, field_name, field_annotation, fields.get(field_name))
+        field_info = _process_field(cls, field_name, field_annotation, fields.get(field_name))
+        if field_info is not None:
+            fields[field_name] = field_info
+        else:
+            if field_name in fields:
+                del fields[field_name]
 
     if parent is not None and parent_info is not None:
         parent_field = parent_info.get_descriptor_field()
@@ -749,7 +767,7 @@ def _process_class(cls: "type[Packet]") -> None:
     setattr(cls, _SSH_PROTO_TYPE_INFO, info)
 
 
-@typing.dataclass_transform(kw_only_default=True)
+@typing.dataclass_transform(kw_only_default=True, frozen_default=True)
 class Packet:
     def __init_subclass__(cls: "type[Packet]") -> None:
         _process_class(cls)
@@ -787,6 +805,8 @@ def _unmarshal[T: Packet](
 
     for field in info.fields.values():
         parsed[field.name] = field.unmarshal(stream, parsed)
+        if field.is_discriminator:
+            break
 
     if not info.header:
         return parsed, cls

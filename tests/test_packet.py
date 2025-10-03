@@ -423,3 +423,75 @@ def test_exclude_parent_marshal() -> None:
     want = b"\x00\x00\x00\x05hello"  # b
     got = marshal(arg)
     assert got == want
+
+
+def test_exclude_parent_strange_marshal() -> None:
+    class ParentPacket(Packet):
+        a: ClassVar[int]
+        b: str
+        c: int | None
+        d: str
+
+    class ChildPacketA(ParentPacket):
+        a: ClassVar[int] = 1
+        c: None = None
+
+    class ChildPacketB(ParentPacket):
+        a: ClassVar[int] = 2
+        c: int
+
+    arg = ChildPacketA(b="hello", d="world")
+    want = (
+        b"\x00\x00\x00\x01\x01"  # a
+        b"\x00\x00\x00\x05hello"  # b
+        b""  # c excluded
+        b"\x00\x00\x00\x05world"  # d
+    )
+    got = marshal(arg)
+    assert got == want
+
+    arg = ChildPacketB(b="hello", c=3, d="world")
+    want = (
+        b"\x00\x00\x00\x01\x02"  # a
+        b"\x00\x00\x00\x05hello"  # b
+        b"\x00\x00\x00\x01\x03"  # c
+        b"\x00\x00\x00\x05world"  # d
+    )
+    got = marshal(arg)
+    assert got == want
+
+
+def test_exclude_parent_strange_unmarshal() -> None:
+    class ParentPacket(Packet):
+        a: ClassVar[int]
+        b: str
+        c: int | None
+        d: str
+
+    class ChildPacketA(ParentPacket):
+        a: ClassVar[int] = 1
+        c: None = None
+
+    class ChildPacketB(ParentPacket):
+        a: ClassVar[int] = 2
+        c: int
+
+    want = ChildPacketA(b="hello", d="world")
+    arg = (
+        b"\x00\x00\x00\x01\x01"  # a
+        b"\x00\x00\x00\x05hello"  # b
+        b""  # c excluded
+        b"\x00\x00\x00\x05world"  # d
+    )
+    got = unmarshal(ParentPacket, arg)
+    assert got == want
+
+    want = ChildPacketB(b="hello", c=3, d="world")
+    arg = (
+        b"\x00\x00\x00\x01\x02"  # a
+        b"\x00\x00\x00\x05hello"  # b
+        b"\x00\x00\x00\x01\x03"  # c
+        b"\x00\x00\x00\x05world"  # d
+    )
+    got = unmarshal(ParentPacket, arg)
+    assert got == want
