@@ -123,7 +123,7 @@ def _is_field_proto_t(annotation: type) -> typing.TypeGuard[type[FieldProto]]:
     return sig == _FIELD_PROTO_SIG
 
 
-def _is_field_class_proto_t(annotation: type) -> typing.TypeGuard[type[FieldProto]]:
+def _is_field_class_proto_t(annotation: type) -> typing.TypeGuard[type[FieldClassProto[typing.Any]]]:
     try:
         sig = _Signatures.from_cls(annotation)
         obj = sig.get_obj()
@@ -778,6 +778,9 @@ class Packet:
 
     def model_marshal(self, stream: "StreamWriter") -> None:
         pass
+
+    def __bytes__(self) -> bytes:
+        return marshal(self)
 
 
 def is_packet(cls: type) -> bool:
