@@ -1,6 +1,6 @@
 [project]
 name = "ssh-proto-types"
-version = "0.1.14.1"
+version = "0.1.15"
 description = "Parser of SSH Protocol types"
 readme = "README.md"
 requires-python = ">=3.13"
