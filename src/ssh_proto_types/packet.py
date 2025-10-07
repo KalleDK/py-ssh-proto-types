@@ -175,16 +175,16 @@ class FieldPacketInfo(FieldInfoBase["Packet"]):
 
     @typing.override
     def _unmarshal_value(self, stream: "StreamReader", parsed: Mapping[str, typing.Any]) -> "Packet":
-        if self.discriminator_name is not None and self.discriminator_name not in parsed:
-            raise ValueError(
-                f"Field {self.name} is a discriminator, but discriminator name {self.discriminator_name} is not present in parsed values"
-            )
+        # if self.discriminator_name is not None and self.discriminator_name not in parsed:
+        #    raise ValueError(
+        #        f"Field {self.name} is a discriminator, but discriminator name {self.discriminator_name} is not present in parsed values"
+        #    )
 
         data = stream.read_bytes() if self.nested else stream
-        child_parsed = (
-            {} if self.discriminator_name is None else {self.discriminator_name: parsed[self.discriminator_name]}
-        )
-        return unmarshal(self.packet_type, data, child_parsed)
+        # child_parsed = (
+        #    {} if self.discriminator_name is None else {self.discriminator_name: parsed[self.discriminator_name]}
+        # )
+        return unmarshal(self.packet_type, data, {})
 
     @typing.override
     def _marshal_value(self, stream: "StreamWriter", obj: "Packet") -> None:
