@@ -493,6 +493,9 @@ def _generate_field_info(cls: type, name: str, annotation: type) -> FieldInfoBas
             is_excluded=is_excluded,
         )
 
+    if isinstance(overlaying_type, typing.NewType):
+        overlaying_type = getattr(overlaying_type, "__supertype__")
+
     if not is_annotated:
         if isinstance(overlaying_type, UnionType):  # type: ignore[misc] This can be union type maybe
             return FieldInfoBase(
